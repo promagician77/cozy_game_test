@@ -10,6 +10,7 @@ html,
 body {
   width: 100%;
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
@@ -18,9 +19,8 @@ body {
 }
 
 #app {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -30,7 +30,9 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   outline: none;
+  touch-action: none;
 }
 
 .hint {

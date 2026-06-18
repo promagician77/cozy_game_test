@@ -9,6 +9,8 @@ import {
 } from './mosaic-data';
 import { AudioEngine } from './audio';
 import { ParticleSystem } from './particles';
+import { applyLayout, type LayoutMetrics } from './layout';
+import { bindTapInput } from './input';
 
 type GamePhase =
   | 'idle'
@@ -30,8 +32,8 @@ interface Stone {
   state: 'placed' | 'in_tray' | 'gem';
 }
 
-const TRAY_Y = -5.8;
-const TRAY_Z = 0.6;
+const TRAY_LOCAL_Y = -6.15;
+const TRAY_LOCAL_Z = 0.6;
 
 function createMatteDisc(color: StoneColor): THREE.Mesh {
   const geo = new THREE.CylinderGeometry(0.42, 0.44, 0.12, 32);
@@ -112,8 +114,9 @@ class CozyMosaicGame {
   private readonly particles: ParticleSystem;
 
   private readonly stones: Stone[] = [];
-  private readonly trayGroup = new THREE.Group();
+  private readonly contentGroup = new THREE.Group();
   private readonly mosaicGroup = new THREE.Group();
+  private readonly trayGroup = new THREE.Group();
   private readonly tapTargets: THREE.Object3D[] = [];
 
   private phase: GamePhase = 'idle';
@@ -122,6 +125,8 @@ class CozyMosaicGame {
   private placedGems = new Set<StoneColor>();
   private clock = new THREE.Clock();
   private trayPulseTween: gsap.core.Tween | null = null;
+  private layout: LayoutMetrics | null = null;
+  private baseCameraZ = 14;
 
   constructor() {
     this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -151,6 +156,8 @@ class CozyMosaicGame {
     this.setupInput();
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    window.visualViewport?.addEventListener('resize', () => this.resize());
+    window.visualViewport?.addEventListener('scroll', () => this.resize());
 
     this.animate();
   }
@@ -197,8 +204,9 @@ class CozyMosaicGame {
     ground.receiveShadow = true;
     this.scene.add(ground);
 
-    this.scene.add(this.mosaicGroup);
-    this.scene.add(this.trayGroup);
+    this.scene.add(this.contentGroup);
+    this.contentGroup.add(this.mosaicGroup);
+    this.mosaicGroup.add(this.trayGroup);
   }
 
   private buildMosaic(): void {
@@ -267,7 +275,7 @@ class CozyMosaicGame {
         metalness: 0.05,
       }),
     );
-    trayBase.position.set(0, TRAY_Y, TRAY_Z - 0.2);
+    trayBase.position.set(0, TRAY_LOCAL_Y, TRAY_LOCAL_Z - 0.2);
     trayBase.castShadow = true;
     trayBase.receiveShadow = true;
 
@@ -279,13 +287,13 @@ class CozyMosaicGame {
         metalness: 0.08,
       }),
     );
-    trayRim.position.set(0, TRAY_Y + 0.2, TRAY_Z - 0.15);
+    trayRim.position.set(0, TRAY_LOCAL_Y + 0.2, TRAY_LOCAL_Z - 0.15);
 
     const trayHit = new THREE.Mesh(
       new THREE.BoxGeometry(4.6, 1.2, 2),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
-    trayHit.position.set(0, TRAY_Y, TRAY_Z);
+    trayHit.position.set(0, TRAY_LOCAL_Y, TRAY_LOCAL_Z);
     trayHit.userData = { type: 'tray' };
 
     const innerGlow = new THREE.Mesh(
@@ -297,22 +305,20 @@ class CozyMosaicGame {
       }),
     );
     innerGlow.rotation.x = -Math.PI / 2;
-    innerGlow.position.set(0, TRAY_Y + 0.22, TRAY_Z);
+    innerGlow.position.set(0, TRAY_LOCAL_Y + 0.22, TRAY_LOCAL_Z);
 
     this.trayGroup.add(trayBase, trayRim, innerGlow, trayHit);
     this.tapTargets.push(trayHit);
   }
 
   private setupInput(): void {
-    const onPointer = (e: PointerEvent) => {
-      this.audio.unlock();
-      const rect = this.canvas.getBoundingClientRect();
-      this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      this.handleTap();
-    };
-
-    this.canvas.addEventListener('pointerdown', onPointer);
+    bindTapInput(this.canvas, {
+      pointer: this.pointer,
+      onTap: () => {
+        this.audio.unlock();
+        this.handleTap();
+      },
+    });
   }
 
   private handleTap(): void {
@@ -376,7 +382,11 @@ class CozyMosaicGame {
     const promises = colorStones.map((stone, i) => {
       const slot = traySlots[i];
       const startPos = stone.group.position.clone();
-      const endPos = new THREE.Vector3(slot.x, TRAY_Y + 0.35, TRAY_Z + slot.z);
+      const endPos = new THREE.Vector3(
+        slot.x,
+        TRAY_LOCAL_Y + 0.35,
+        TRAY_LOCAL_Z + slot.z,
+      );
       const midPos = new THREE.Vector3(
         (startPos.x + endPos.x) / 2,
         startPos.y - 2.5,
@@ -582,13 +592,16 @@ class CozyMosaicGame {
       ease: 'back.out(2.5)',
     });
 
-    // Halo flash
+    // Halo flash, then hide so gems don't read as "ringed planets"
     gsap.to(stone.halo.material, {
-      opacity: 0.7,
+      opacity: 0.65,
       duration: 0.15,
       ease: 'power2.out',
       yoyo: true,
       repeat: 1,
+      onComplete: () => {
+        stone.halo.visible = false;
+      },
     });
 
     // Gentle idle shimmer on gem
@@ -631,7 +644,7 @@ class CozyMosaicGame {
 
     // Subtle camera celebration nudge
     gsap.to(this.camera.position, {
-      z: 13.2,
+      z: this.baseCameraZ - 0.8,
       duration: 1.2,
       ease: 'power2.inOut',
       yoyo: true,
@@ -640,18 +653,19 @@ class CozyMosaicGame {
   }
 
   private resize(): void {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    this.renderer.setSize(w, h);
+    const viewport = window.visualViewport;
+    const w = viewport?.width ?? window.innerWidth;
+    const h = viewport?.height ?? window.innerHeight;
+
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
-    // Portrait-friendly camera framing
-    const isPortrait = h > w;
-    this.camera.position.y = isPortrait ? 0.2 : 0.5;
-    this.camera.position.z = isPortrait ? 15 : 14;
-    this.mosaicGroup.position.y = isPortrait ? 1.2 : 0.8;
-    this.mosaicGroup.scale.setScalar(isPortrait ? 0.95 : 1);
+    this.layout = applyLayout(this.camera, this.contentGroup, {
+      width: w,
+      height: h,
+    });
+    this.baseCameraZ = this.layout.cameraZ;
   }
 
   private animate(): void {
