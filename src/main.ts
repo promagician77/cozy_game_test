@@ -10,7 +10,7 @@ import {
 import { AudioEngine } from './audio';
 import { ParticleSystem } from './particles';
 import { applyLayout, type LayoutMetrics } from './layout';
-import { bindTapInput } from './input';
+import { bindSceneInput, type SceneInput } from './input';
 
 type GamePhase =
   | 'idle'
@@ -125,8 +125,8 @@ class CozyMosaicGame {
   private clock = new THREE.Clock();
   private trayPulseTween: gsap.core.Tween | null = null;
   private layout: LayoutMetrics | null = null;
-  private baseCameraZ = 14;
   private placementTapMeshes: THREE.Mesh[] = [];
+  private sceneInput!: SceneInput;
 
   constructor() {
     this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -312,12 +312,9 @@ class CozyMosaicGame {
   }
 
   private setupInput(): void {
-    bindTapInput(this.canvas, {
-      pointer: this.pointer,
-      onTap: () => {
-        this.audio.unlock();
-        this.handleTap();
-      },
+    this.sceneInput = bindSceneInput(this.canvas, this.camera, this.pointer, () => {
+      this.audio.unlock();
+      this.handleTap();
     });
   }
 
@@ -676,12 +673,18 @@ class CozyMosaicGame {
       });
 
     // Subtle camera celebration nudge
+    this.sceneInput.controls.enabled = false;
+    const startZ = this.camera.position.z;
     gsap.to(this.camera.position, {
-      z: this.baseCameraZ - 0.8,
+      z: startZ - 0.8,
       duration: 1.2,
       ease: 'power2.inOut',
       yoyo: true,
       repeat: 1,
+      onComplete: () => {
+        this.sceneInput.controls.enabled = true;
+        this.sceneInput.controls.update();
+      },
     });
   }
 
@@ -694,16 +697,21 @@ class CozyMosaicGame {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
-    this.layout = applyLayout(this.camera, this.contentGroup, {
+    this.layout = applyLayout(this.contentGroup, {
       width: w,
       height: h,
     });
-    this.baseCameraZ = this.layout.cameraZ;
+    this.sceneInput?.setLookAt(
+      this.layout.lookAtY,
+      this.layout.cameraY,
+      this.layout.cameraZ,
+    );
   }
 
   private animate(): void {
     requestAnimationFrame(() => this.animate());
     const dt = this.clock.getDelta();
+    this.sceneInput?.update();
     this.particles.update(dt);
     this.renderer.render(this.scene, this.camera);
   }

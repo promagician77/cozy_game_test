@@ -55,7 +55,6 @@ export function computeLayout({ width, height }: ViewportSize): LayoutMetrics {
 }
 
 export function applyLayout(
-  camera: THREE.PerspectiveCamera,
   contentGroup: THREE.Group,
   viewport: ViewportSize,
 ): LayoutMetrics {
@@ -63,9 +62,6 @@ export function applyLayout(
 
   contentGroup.position.set(0, layout.mosaicY, 0);
   contentGroup.scale.setScalar(layout.mosaicScale);
-
-  camera.position.set(0, layout.cameraY, layout.cameraZ);
-  camera.lookAt(0, layout.lookAtY, 0);
 
   return layout;
 }

@@ -1,19 +1,45 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-const TAP_MOVE_PX = 14;
-const TAP_MAX_MS = 450;
+const TAP_MOVE_PX = 10;
 
-export interface TapInput {
+export interface SceneInput {
   pointer: THREE.Vector2;
-  onTap: () => void;
+  controls: OrbitControls;
+  update: () => void;
+  setLookAt: (lookAtY: number, cameraY: number, cameraZ: number) => void;
 }
 
-export function bindTapInput(canvas: HTMLCanvasElement, input: TapInput): () => void {
-  const pointer = input.pointer;
+export function bindSceneInput(
+  canvas: HTMLCanvasElement,
+  camera: THREE.PerspectiveCamera,
+  pointer: THREE.Vector2,
+  onTap: () => void,
+): SceneInput {
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.09;
+  controls.enablePan = true;
+  controls.panSpeed = 0.55;
+  controls.rotateSpeed = 0.75;
+  controls.zoomSpeed = 0.85;
+  controls.screenSpacePanning = true;
+  controls.minDistance = 7;
+  controls.maxDistance = 24;
+  controls.minPolarAngle = Math.PI * 0.28;
+  controls.maxPolarAngle = Math.PI * 0.62;
+  controls.touches.ONE = THREE.TOUCH.ROTATE;
+  controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN,
+  };
+
+  const cameraAtDown = new THREE.Vector3();
+  const targetAtDown = new THREE.Vector3();
   let downX = 0;
   let downY = 0;
-  let downAt = 0;
-  let dragging = false;
 
   const updatePointer = (clientX: number, clientY: number): void => {
     const rect = canvas.getBoundingClientRect();
@@ -23,48 +49,45 @@ export function bindTapInput(canvas: HTMLCanvasElement, input: TapInput): () => 
 
   const onPointerDown = (e: PointerEvent): void => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    dragging = false;
     downX = e.clientX;
     downY = e.clientY;
-    downAt = performance.now();
+    cameraAtDown.copy(camera.position);
+    targetAtDown.copy(controls.target);
     updatePointer(e.clientX, e.clientY);
-    canvas.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: PointerEvent): void => {
-    if (!canvas.hasPointerCapture(e.pointerId)) return;
-    const dx = e.clientX - downX;
-    const dy = e.clientY - downY;
-    if (Math.hypot(dx, dy) > TAP_MOVE_PX) dragging = true;
     updatePointer(e.clientX, e.clientY);
   };
 
   const onPointerUp = (e: PointerEvent): void => {
-    if (!canvas.hasPointerCapture(e.pointerId)) return;
-    canvas.releasePointerCapture(e.pointerId);
     updatePointer(e.clientX, e.clientY);
 
-    const elapsed = performance.now() - downAt;
-    if (!dragging && elapsed <= TAP_MAX_MS) {
-      input.onTap();
+    const fingerMoved = Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_MOVE_PX;
+    const viewMoved =
+      camera.position.distanceToSquared(cameraAtDown) > 0.02 ||
+      controls.target.distanceToSquared(targetAtDown) > 0.02;
+
+    if (!fingerMoved && !viewMoved) {
+      onTap();
     }
   };
 
-  const onPointerCancel = (e: PointerEvent): void => {
-    if (canvas.hasPointerCapture(e.pointerId)) {
-      canvas.releasePointerCapture(e.pointerId);
-    }
+  canvas.addEventListener('pointerdown', onPointerDown, { passive: true });
+  canvas.addEventListener('pointermove', onPointerMove, { passive: true });
+  canvas.addEventListener('pointerup', onPointerUp, { passive: true });
+  canvas.addEventListener('pointercancel', onPointerUp, { passive: true });
+
+  const setLookAt = (lookAtY: number, cameraY: number, cameraZ: number): void => {
+    controls.target.set(0, lookAtY, 0);
+    camera.position.set(0, cameraY, cameraZ);
+    controls.update();
   };
 
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', onPointerCancel);
-
-  return () => {
-    canvas.removeEventListener('pointerdown', onPointerDown);
-    canvas.removeEventListener('pointermove', onPointerMove);
-    canvas.removeEventListener('pointerup', onPointerUp);
-    canvas.removeEventListener('pointercancel', onPointerCancel);
+  return {
+    pointer,
+    controls,
+    update: () => controls.update(),
+    setLookAt,
   };
 }
