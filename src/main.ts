@@ -15,8 +15,7 @@ import { bindTapInput } from './input';
 type GamePhase =
   | 'idle'
   | 'vacuuming'
-  | 'awaiting_tray'
-  | 'awaiting_outline'
+  | 'awaiting_place'
   | 'returning'
   | 'complete';
 
@@ -127,6 +126,7 @@ class CozyMosaicGame {
   private trayPulseTween: gsap.core.Tween | null = null;
   private layout: LayoutMetrics | null = null;
   private baseCameraZ = 14;
+  private placementTapMeshes: THREE.Mesh[] = [];
 
   constructor() {
     this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -329,6 +329,29 @@ class CozyMosaicGame {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects(this.tapTargets, false);
 
+    if (this.phase === 'awaiting_place' && this.activeColor) {
+      const color = this.activeColor;
+      const trayHit = hits.find((h) => h.object.userData.type === 'tray');
+      const zoneHit = hits.find(
+        (h) =>
+          h.object.userData.type === 'colorZone' &&
+          h.object.userData.color === color,
+      );
+
+      const outlineHits = this.raycaster.intersectObjects(
+        this.stones.filter((s) => s.color === color).map((s) => s.outline),
+        false,
+      );
+
+      const cellHit = hits.find((h) => h.object.userData.type === 'placementCell');
+
+      if (trayHit || zoneHit || cellHit || outlineHits.length > 0) {
+        this.audio.playTap();
+        void this.returnStones(color);
+      }
+      return;
+    }
+
     if (hits.length === 0) return;
 
     const target = hits[0].object;
@@ -339,17 +362,6 @@ class CozyMosaicGame {
       if (this.collectedColors.has(color) || this.placedGems.has(color)) return;
       this.audio.playTap();
       void this.vacuumColor(color);
-    } else if (
-      type === 'colorZone' &&
-      this.phase === 'awaiting_outline' &&
-      this.activeColor &&
-      target.userData.color === this.activeColor
-    ) {
-      this.audio.playTap();
-      void this.returnStones(this.activeColor);
-    } else if (type === 'tray' && this.phase === 'awaiting_tray' && this.activeColor) {
-      this.audio.playTap();
-      this.armOutlineReturn();
     }
   }
 
@@ -361,7 +373,7 @@ class CozyMosaicGame {
   private async vacuumColor(color: StoneColor): Promise<void> {
     this.phase = 'vacuuming';
     this.activeColor = color;
-    this.setHint('Tap the tray');
+    this.setHint('Tap the tray or empty outline');
 
     const colorStones = this.stones.filter(
       (s) => s.color === color && s.state === 'placed',
@@ -427,8 +439,52 @@ class CozyMosaicGame {
 
     await Promise.all(promises);
     this.collectedColors.add(color);
-    this.phase = 'awaiting_tray';
+    this.phase = 'awaiting_place';
+    this.showPlacementTargets(color);
     this.pulseTray();
+  }
+
+  private showPlacementTargets(color: StoneColor): void {
+    const colorStones = this.stones.filter((s) => s.color === color);
+    colorStones.forEach((s) => {
+      gsap.to(s.outline.material, {
+        opacity: 0.85,
+        duration: 0.35,
+        ease: 'power2.out',
+      });
+      gsap.to(s.outline.scale, {
+        x: 1.08,
+        y: 1.08,
+        z: 1.08,
+        duration: 0.5,
+        ease: 'sine.inOut',
+        yoyo: true,
+        repeat: -1,
+      });
+
+      const hit = new THREE.Mesh(
+        new THREE.CircleGeometry(0.48, 16),
+        new THREE.MeshBasicMaterial({ visible: false }),
+      );
+      hit.rotation.x = -Math.PI / 2;
+      hit.position.copy(s.group.position);
+      hit.position.z = 0.45;
+      hit.userData = { type: 'placementCell', color };
+      this.mosaicGroup.add(hit);
+      this.placementTapMeshes.push(hit);
+      this.tapTargets.push(hit);
+    });
+  }
+
+  private clearPlacementTargets(): void {
+    this.placementTapMeshes.forEach((mesh) => {
+      this.mosaicGroup.remove(mesh);
+      const idx = this.tapTargets.indexOf(mesh);
+      if (idx >= 0) this.tapTargets.splice(idx, 1);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    });
+    this.placementTapMeshes = [];
   }
 
   private computeTraySlots(count: number): { x: number; z: number }[] {
@@ -464,31 +520,6 @@ class CozyMosaicGame {
     });
   }
 
-  private armOutlineReturn(): void {
-    if (!this.activeColor) return;
-    this.phase = 'awaiting_outline';
-    this.stopTrayPulse();
-    this.setHint('Tap the empty outline');
-
-    const colorStones = this.stones.filter((s) => s.color === this.activeColor);
-    colorStones.forEach((s) => {
-      gsap.to(s.outline.material, {
-        opacity: 0.85,
-        duration: 0.35,
-        ease: 'power2.out',
-      });
-      gsap.to(s.outline.scale, {
-        x: 1.08,
-        y: 1.08,
-        z: 1.08,
-        duration: 0.5,
-        ease: 'sine.inOut',
-        yoyo: true,
-        repeat: -1,
-      });
-    });
-  }
-
   private stopOutlinePulse(color: StoneColor): void {
     this.stones
       .filter((s) => s.color === color)
@@ -504,7 +535,9 @@ class CozyMosaicGame {
   }
 
   private async returnStones(color: StoneColor): Promise<void> {
+    this.clearPlacementTargets();
     this.stopOutlinePulse(color);
+    this.stopTrayPulse();
     this.phase = 'returning';
     this.setHint('');
 
